@@ -2,14 +2,12 @@ from __future__ import print_function
 from matplotlib.mlab import prctile
 from numpy.random import rand, seed
 from scipy.interpolate import interp1d 
-
 Isochrones = '/home/dotter/lib/python/Isochrones.py'
 emcee='/home/jlin/emcee/dfm-emcee-6779c01/emcee'
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.expanduser(Isochrones)))
 sys.path.append(os.path.dirname(os.path.expanduser(emcee)))
-import Isochrones
 import emcee
 from Isochrones import DSED_Isochrones
 from numpy import *
@@ -18,6 +16,36 @@ import scipy
 from scipy.spatial.distance import cdist
 import csv
 from astropy import units as u
+
+class star:
+    def __init__(self):
+        self.Teff=None; self.sigma_Teff=None
+        self.logg=None; self.sigma_logg=None
+        self.FeH=None; self.sigma_FeH = None
+        self.kmag=None; self.sigma_kmag = None #apparent
+        self.Kmag=None self.sigma_Kmag = None #absolute
+        self.parallax=None; self.sigma_parallax=None
+        self.delta_nu=None; self.sigma_dnu=None
+        self.nu_max=None; self.sigma_numax=None
+        self.data=empty(6)
+        self.cov=empty([6,6])
+    def get_absolute_Kmag(self):
+        self.distance, self.sigma_distance = parallax_distance(self.parallax, self.sigma_parallax)
+        self.Kmag, self.sigma_Kmag = def Kmag_from_distance(self.kmag, self.sigma_kmag, self.distance, self.sigma_distance)
+
+
+    def pack(self):
+        self.data=array([self.Teff,self.logg,self.FeH,self.Kmag,self.delta_nu,self.nu_max])
+        #fill the covariance matrix here...
+        self.cov[0,0]=pow(self.sigma_Teff,2)
+        self.cov[1,1]=pow(self.sigma_logg,2)
+        self.cov[2,2]=pow(self.sigma_FeH,2)
+        self.cov[3,3]=pow(self.sigma_Kmag,2)
+        self.cov[4,4]=pow(self.sigma_dnu,2)
+        self.cov[5,5]=pow(self.sigma_numax,2)
+        #and then invert it
+        self.icov=inv(self.cov)
+        self.det_cov = det(self.cov)
 
 #constants
 twopi4=pow(2*pi,4) #(2*pi)^4
@@ -95,12 +123,19 @@ def get_one_star(age,mass,x):
             K0=interp(m0,x.data[i0]['Ks      '])(mass)
             K1=interp(m1,x.data[i1]['Ks      '])(mass)
 
+            L0=interp(m0,x.data[i0]['LogL_Lo'])(mass)
+            L1=interp(m1,x.data[i1]['LogL_Lo'])(mass)
+
             alfa=(age-x.ages[i0])/(x.ages[i1]-x.ages[i0])
             beta=1.0-alfa
             Teff=alfa*pow(10,T1) + beta*pow(10,T0)
             logg=alfa*g1 + beta*g0
             Kmag=alfa*K1 + beta*K0
-            params=array([Teff,logg,Kmag])
+            logL=alpha*L1 + beta*L0
+            luminosity = pow(10,logL)
+            dnu = delta_nu_func(mass,Teff,luminosity)
+            numax= nu_max_func(mass,Teff,luminosity)
+            params=array([Teff,logg,Kmag,dnu,numax])
             ok=True
     return ok,params
 
@@ -109,7 +144,7 @@ def get_star(age,mass,FeH,y):
     params=[]
     #y is a sorted list of isochrones ordered by increasing [Fe/H]
     if y[0].FeH <= FeH <= y[-1].FeH: 
-        met=[]; Teff=[]; logg=[]; Kmag=[] 
+        met=[]; Teff=[]; logg=[]; Kmag=[]; dnu=[]; numax=[]
         for i in range(len(y)):
             if y[i].FeH <= FeH < y[i+1].FeH: 
                 iy=i
@@ -122,21 +157,20 @@ def get_star(age,mass,FeH,y):
                 Teff.append(params[0])
                 logg.append(params[1])
                 Kmag.append(params[2])
+                dnu.append(params[3])
+                numax.append(params[4])
         #now we have two lists, 
         #one filled with mets and the other with results
         if len(met)>1 and met[0] <= FeH <= met[-1]:
             params[0] = interp(met,Teff)(FeH)
             params[1] = interp(met,logg)(FeH)
             params[2] = interp(met,Kmag)(FeH)
+            params[3] = interp(met,dnu)(FeH)
+            params[4] = interp(met,numax)(FeH)
         params=append(params,FeH)
     return ok, array(params)
 
 def lnP(model,value,sigma):
-    alpha=-2.35 #Salpeter IMF slope
-    m0=0.1
-    norm=-(alpha+1)/pow(m0,alpha+1.)
-#    def Prior(m): return norm*pow(m,alpha)
-#    def lnPrior(m): return log(Prior(m))
     age =model[0]  # Gyr
     mass=model[1] # Msun
     feh =model[2] 
@@ -151,18 +185,18 @@ def lnPrior(m):
 
 def lnProb(value,sigma,age,mass,feh):
     ok,model=get_star(age,mass,feh,y)
-    #model = [Teff, logg, Kmag, FeH]
+    k=len(value)
+    twopik=pow(2*pi,k)
+    #model = [Teff, logg, Kmag, delta_nu, nu_max, FeH]
     if ok:
-        norm=log(sqrt( twopi4 * prod(pow(sigma,2))))
-        #return lnPrior(mass) - sum( pow( (value-model)/sigma, 2) ) - norm, model
+        norm=log(sqrt( twopik * prod(pow(sigma,2))))
         return lnPrior(mass) -0.5* sum( pow( (value-model)/sigma, 2) ) + norm, model
 
     else:
-        return -inf, array([0,99.99,99.99,99.99])
+        return -inf, array([0,99.99,99.99,99.99,99.99,99.99])
 
 
-#def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,ID,star_data):
-def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,star_data): #kmagS,ekmagS=app kmag
+def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,star_data): #kmagS,ekmagS=app kmag
     print(star_data[ID])
     seed() #each thread has an independent random number sequence
     FeH=star_data[FehS]
@@ -178,15 +212,15 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
         kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],ekmagS,distance,err_distance)
 
     #value=array([star_data[TeffS],star_data[loggS],star_data[FehS],kmag_S])
-    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]])
+    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[delta_nuS],star_data[nu_maxS],star_data[FehS]])
  
 
     if type(eTeffS)==str:
         #sigma=array([star_data[eTeffS],star_data[eloggS],star_data[eFehS],ekmag_S]) 
-        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) 
+        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[edelta_nuS],star_data[enu_maxS],star_data[eFehS]]) 
     else:
         #sigma=array([eTeffS,eloggS,eFehS,ekmag_S])
-        sigma=array([eTeffS,eloggS,ekmag_S,eFehS])
+        sigma=array([eTeffS,eloggS,ekmag_S,edelta_nuS,enu_maxS,eFehS])
     print(value)
     print(sigma)
     ciso=hr[argmin(abs(feh-FeH))]
@@ -228,10 +262,6 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
 
-    # logg_dist=logg_dist[squeeze(where( Teff_dist>2000.0))]
-    # Teff_dist=Teff_dist[squeeze(where(Teff_dist>2000.0))]
-    # kmag_dist=kmag_dist[squeeze(where( (kmag_dist>-20.0) & (kmag_dist<20.0)))]
-
     #print basic results
     print()
     print("Result: ", star_data[ID])
@@ -240,25 +270,21 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    #print(age_dist)
     print("len(age_dist)=", len(age_dist))
     print(min(age_dist))
     print(max(age_dist))
- #   age_dist = age_dist[where((age_dist < 15)&(age_dist>0))]
     print("len(age_dist)=", len(age_dist))
 
     mass_dist=sampler.flatchain[:,1]
     print("len(mass_dist)=", len(mass_dist))
     print(min(mass_dist))
     print(max(mass_dist))
- #   mass_dist= mass_dist[where((mass_dist < 5)&(mass_dist>0.5))]
     print("len(mass_dist)=", len(mass_dist))
 
     feh_dist = sampler.flatchain[:,2]
     print("len(feh_dist)=", len(feh_dist))
     print(min(feh_dist))
     print(max(feh_dist))
- #   feh_dist = feh_dist[where((feh_dist>=-2.5)&(feh_dist<0.5))]
     print("len(feh_dist)=", len(feh_dist))
 
     print("len(kmag_dist)=", len(kmag_dist))
@@ -378,11 +404,9 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
         result.append(0.0)
         result.append(0.0)
 
-    #return (array(result),sampler.flatchain,sampler.blobs)
     return array(result)
 
-def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,kmagS,ekmagS,parallaxS,eparallaxS,ID,my_thread=1,max_thread=1):
-#def do_run_emcee(my_thread=1,max_thread=1):
+def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,my_thread=1,max_thread=1):
     max_stars = len(data)
     begin,end,increment = my_thread,max_stars,max_thread 
 
@@ -390,16 +414,19 @@ def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,k
     f=open(filename.strip(),'w')
     f.write("{0:>5s}".format('HIP'))
 
-    f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}{20:>13s}{21:>13s}{22:>13s}{23:>13s}{24:>13s}{25:>13s}{26:>13s}{27:>13s}{28:>13s}{29:>13s}{30:>13s}{31:>13s}{32:>13s}{33:>13s}{34:>13s}{35:>13s}{36:>13s}".format(
+    f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}{20:>13s}{21:>13s}{22:>13s}{23:>13s}{24:>13s}{25:>13s}{26:>13s}{27:>13s}{28:>13s}{29:>13s}{30:>13s}{31:>13s}{32:>13s}{33:>13s}{34:>13s}{35:>13s}{36:>13s}{37:>13s}{38:>13s}{39:>13s}{40:>13s}{41:>13s}{42:>13s}{43:>13s}{44:>13s}{45:>13s}{46:>13s}".format(
          'age_guess',  'age_mean',  'age_sigma',  'age_05th',  'age_median',  'age_95th',
          'mass_guess', 'mass_mean', 'mass_sigma', 'mass_05th', 'mass_median', 'mass_95th',
                        'teff_mean','teff_sigma','teff_05th','teff_median','teff_95th',
                        'logg_mean','logg_sigma','logg_05th','logg_median','logg_95th',
-                       'kmag_mean','kmag_sigma','kmag_05th','kmag_median','kmag_95th','feh_mean','feh_sigma','feh_05th','feh_median','feh_95th',
-         'teffS','loggS','FehS','kmagS','parallaxS'))
+                       'kmag_mean','kmag_sigma','kmag_05th','kmag_median','kmag_95th',
+                       'delta_nu_mean', 'delta_nu_sigma', 'delta_nu_05th', 'delta_nu_95th',
+                       'nu_max_mean', 'nu_max_sigma', 'nu_max_05th', 'nu_max_95th',
+                       'feh_mean','feh_sigma','feh_05th','feh_median','feh_95th',
+         'teffS','loggS','FehS','kmagS','parallaxS','delta_nuS', 'nu_maxS'))
     f.write('\n')
     for i in range(begin,end,increment):
-        result = run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,data[i])
+        result = run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,data[i])
         #write mags and errors
         f.write("{0:>10s}".format(str(data[ID][i]) ))
         print(data[ID][i])
@@ -407,13 +434,13 @@ def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,k
         for j in range(len(result)):
             f.write(" {0:12.4e}".format(result[j]))
         #done with line
-        f.write(' {0:>12.4e} {1:>12.4e} {2:>12.4e} {3:>12.4e} {4:>12.4e} '.format(data[TeffS][i],data[loggS][i],data[FehS][i],data[kmagS][i],data[parallaxS][i]))
+        f.write(' {0:>12.4e} {1:>12.4e} {2:>12.4e} {3:>12.4e} {4:>12.4e} '.format(data[TeffS][i],data[loggS][i],data[FehS][i],data[kmagS][i],data[parallaxS][i],data[delta_nuS][i],data[nu_maxS][i]))
         f.write("\n")
     #done writing
     f.close()
 
 #def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,ID,star_data):
-def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,star_data): #kmagS,ekmagS=app kmag
+def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,star_data): #kmagS,ekmagS=app kmag
 
     print(star_data[ID])
     seed() #each thread has an independent random number sequence
@@ -430,14 +457,14 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
         kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],ekmagS,distance,err_distance)
 
     #value=array([star_data[TeffS],star_data[loggS],star_data[FehS],kmag_S])
-    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]])
+    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[delta_nuS],star_data[nu_maxS],star_data[FehS]])
 
     if type(eTeffS)==str:
         #sigma=array([star_data[eTeffS],star_data[eloggS],star_data[eFehS],ekmag_S]) 
-        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) 
+        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[edelta_nuS],star_data[enu_maxS],star_data[eFehS]])
     else:
         #sigma=array([eTeffS,eloggS,eFehS,ekmag_S])
-        sigma=array([eTeffS,eloggS,ekmag_S,eFehS])
+        sigma=array([eTeffS,eloggS,ekmag_S,edelta_nuS,enu_maxS,eFehS])
 
     ciso=hr[argmin(abs(feh-FeH))]
     ageg,massg=age_mass_guess(star_data[TeffS],star_data[loggS],ciso)
@@ -469,12 +496,6 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     min_w,min_s=unravel_index(lnp.argmin(),lnp.shape) #min lnp step+walker
     mode=chain[min_w,min_s] #min lnp for age,mass,feh
     lnp_flat=sampler.flatlnprobability
-
-    #for jjj in range(len(lnp_flat)):
-    #    print(sampler.flatchain[jjj],lnp_flat[jjj])
-    #import pickle
-    #print(len(sampler.flatchain))
-    #pickle.dump((sampler.flatchain,chain.reshape((nwalkers*nrun,ndim)),lnp.reshape(nwalkers*nrun,1)),open('test.p','wb'))
     
     Teff_dist=[]
     logg_dist=[]
@@ -484,16 +505,14 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
             Teff_dist.append(sampler.blobs[i][j][0])
             logg_dist.append(sampler.blobs[i][j][1])
             kmag_dist.append(sampler.blobs[i][j][2])
+            delta_nu_dist.append(sampler.blobs[i][j][3])
+            nu_max_dist.append(sampler.blobs[i][j][4])
 
     logg_dist=array(logg_dist)
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
-    # import pickle
-    # pickle.dump((Teff_dist,logg_dist,kmag_dist),open('test.p','wb'))
-
-    #logg_dist=logg_dist[squeeze(where(Teff_dist>2000.0))]
-    #Teff_dist=Teff_dist[squeeze(where(Teff_dist>2000.0))]
-    #kmag_dist=kmag_dist[squeeze(where( (kmag_dist>-20.0) & (kmag_dist<20.0)))]
+    delta_nu_dist=array(delta_nu_dist)
+    nu_max_dist=array(nu_max_dist)
  
     #print basic results
     print()
@@ -504,22 +523,18 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    #print(age_dist)
     print("len(age_dist)=", len(age_dist))
     print(min(age_dist),max(age_dist),mean(age_dist))
-    #age_dist = age_dist[where((age_dist < 15)&(age_dist>0))]
     print("len(age_dist)=", len(age_dist))
 
     mass_dist=sampler.flatchain[:,1]
     print("len(mass_dist)=", len(mass_dist))
     print(min(mass_dist),max(mass_dist),mean(mass_dist))
-    #mass_dist= mass_dist[where((mass_dist < 5)&(mass_dist>0.5))]
     print("len(mass_dist)=", len(mass_dist))
 
     feh_dist = sampler.flatchain[:,2]
     print("len(feh_dist)=", len(feh_dist))
     print(min(feh_dist),max(feh_dist),mean(feh_dist))
-    #feh_dist = feh_dist[where((feh_dist>=-2.5)&(feh_dist<0.5))]
     print("len(feh_dist)=", len(feh_dist))
 
     print("len(kmag_dist)=", len(kmag_dist))
@@ -535,6 +550,8 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
         mass_dist=mass_dist[0:0]
         feh_dist=feh_dist[0:0]
         lnp_flat=lnp_flat[0:0]
+        delta_nu_dist=delta_nu_dist[0:0]
+        nu_max_dist=nu_max_dist[0:0]
     else:
         logg_dist=logg_dist[good]
         Teff_dist=Teff_dist[good]
@@ -543,6 +560,9 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
         mass_dist=mass_dist[good]
         feh_dist=feh_dist[good]
         lnp_flat=lnp_flat[good]
+        delta_nu_dist=delta_nu_dist[good]
+        nu_max_dist=nu_max_dist[good]
+        
 
     result.append(ageg)
 
@@ -618,6 +638,36 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
         result.append(99.0)
         result.append(99.0)
 
+    if len(delta_nu_dist) > 0:
+        pct=prctile(delta_nu_dist,p=[2.5,50,97.5])
+        result.append(mean(delta_nu_dist))
+        result.append(std(delta_nu_dist))
+        result.append(pct[0])
+        result.append(pct[1])
+        result.append(pct[2])
+    else:
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+
+
+    if len(nu_max_dist) > 0:
+        pct=prctile(nu_max_dist,p=[2.5,50,97.5])
+        result.append(mean(nu_max_dist))
+        result.append(std(nu_max_dist))
+        result.append(pct[0])
+        result.append(pct[1])
+        result.append(pct[2])
+    else:
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+        result.append(99.0)
+
+
     if len(feh_dist)>0:
         mean_feh = mean(feh_dist)
         std_feh = std(feh_dist)
@@ -641,11 +691,9 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result.append(mode[1])#mass
     result.append(mode[2])#feh
         
-    #return (array(result),sampler.flatchain,sampler.blobs)
-    return(array(result),age_dist,mass_dist,Teff_dist,logg_dist,kmag_dist,feh_dist,lnp_flat)
+    return(array(result),age_dist,mass_dist,Teff_dist,logg_dist,kmag_dist,delta_nu_dist,nu_max_dist,feh_dist,lnp_flat)
 
-#def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,ID ,my_thread=1,max_thread=1):
-def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,my_thread=1,max_thread=1):
+def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,my_thread=1,max_thread=1):
 
     max_stars = len(data)
     begin,end,increment = my_thread,max_stars,max_thread 
@@ -653,10 +701,13 @@ def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,elog
     filename = out_dir + '/' + out_prefix+'_'+str(begin)+'_'+str(increment)+'.dat'
     f=open(filename.strip(),'w')
     f.write("{0:>5s}".format('HIP'))
-    f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}".format('age_mean',  'age_sigma',  'mass_mean', 'mass_sigma',  'teff_mean','teff_sigma','logg_mean','logg_sigma', 'kmag_mean','kmag_sigma','FeH_mean', 'FeH_sigma','age_mode','mass_mode','feh_mode','teffS','loggS','FehS','kmagS','parallaxS'))
+    f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}{20:>13s}{21:>13s}{22:>13s}{23:>13s}".format('age_mean',  'age_sigma',  'mass_mean', 'mass_sigma',  'teff_mean','teff_sigma','logg_mean',
+                                                             'logg_sigma', 'kmag_mean','kmag_sigma', 'delta_nu_mean', 'delta_nu_sigma', 'nu_max_mean', 
+                                                             'nu_max_sigma','FeH_mean', 'FeH_sigma','age_mode','mass_mode','feh_mode','teffS',
+                                                             'loggS','FehS','kmagS','parallaxS','delta_nuS','nu_maxS'))
     f.write('\n')
     for i in range(begin,end,increment):
-        results = run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,data[i])
+        results = run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,delta_nuS,edelta_nuS,nu_maxS,enu_maxS,ID,data[i])
 
         result=[results[0][1],results[0][2],results[0][7],results[0][8],results[0][12],results[0][13],results[0][17],results[0][18],results[0][22],results[0][23],results[0][27],results[0][28],results[0][32],results[0][33],results[0][34],data[TeffS][i],data[loggS][i],data[FehS][i],data[kmagS][i],data[parallaxS][i]] #all mean and sigma vals only
         gg=open(out_dir+ '/' + str(data[ID][i]),'w')
@@ -666,12 +717,13 @@ def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,elog
                        '# teff_mean','# teff_sigma','# teff_05th','# teff_median','# teff_95th',
                        '# logg_mean','# logg_sigma','# logg_05th','# logg_median','# logg_95th',
                        '# kmag_mean','# kmag_sigma','# kmag_05th','# kmag_median','# kmag_95th',
+                       '# delta_nu_mean', '#delta_nu_sigma', '#nu_max_mean', '#nu_max_sigma',
                        '# feh_mean','# feh_sigma','# feh_05th','# feh_median','# feh_95th', '# age_mode',
                '# mass_mode','# feh_mode ', '# teffS','# loggS','# FehS','# kmagS','# parallaxS']
         gg.close()
         with open(out_dir+ '/' +str(data[ID][i]) ,'a') as gg:
             writer = csv.writer(gg, delimiter='\t')
-            writer.writerows(zip(names,list(results[0])+[data[TeffS][i],data[loggS][i],data[FehS][i],data[kmagS][i],data[parallaxS][i]]))
+            writer.writerows(zip(names,list(results[0])+[data[TeffS][i],data[loggS][i],data[FehS][i],data[kmagS][i],data[parallaxS][i],data[delta_nuS][i],data[nu_maxS][i]]))
 
         with open(out_dir+ '/' +str(data[ID][i]) ,'a') as gg:
             gg.write('# age     mass      teff     logg    kmag     feh       lnP\n')
