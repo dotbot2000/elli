@@ -18,9 +18,10 @@ class star:
         self.kmag=None; self.sigma_kmag = None #apparent
         self.Kmag=None; self.sigma_Kmag = None #absolute
         self.parallax=None; self.sigma_parallax=None
-        self.delta_nu=None; self.sigma_dnu=None
-        self.nu_max=None; self.sigma_numax=None
-        self.ID=None
+        self.delta_nu=None; self.sigma_delta_nu=None
+        self.nu_max=None; self.sigma_nu_max=None
+        self.ID=None; self.initial_guess=None
+        self.sampler=None
 
     def pack(self):
         self.data=[]
@@ -78,7 +79,31 @@ class star:
         self.det_cov = det(self.cov)
         self.log_det_cov = log(self.det_cov)
 
+    def run_emcee(self,nwalkers=200,nburn=100,nrun=400,a=3.):
+        #each thread has an independent random number sequence
+        seed() 
+        ndim=3
 
+        #initial guess for this star
+        age_guess=7.0
+        mass_guess=0.8
+        feh_guess=self.FeH+1e-5
+
+        guess=array([age_guess,mass_guess,feh_guess])
+        self.initial_guess = guess
+
+        #create a cloud around the guess for the walkers
+        p0=[guess*(1-0.2*(0.5-rand(ndim))) for i in range(nwalkers)]
+
+        #create an instance 
+        self.sampler=emcee.EnsembleSampler(nwalkers,ndim,lnProb,args=[self],a=a)
+
+        #burn-in: save end state and reset
+        pos,prob,state,blob=self.sampler.run_mcmc(p0,nburn)
+        self.sampler.reset()
+
+        #main run
+        self.sampler.run_mcmc(pos,nrun)
 
 def parallax_distance(parallax,err_parallax): #both in mas
     d=(parallax*u.mas).to(u.parsec, equivalencies=u.parallax())
@@ -189,206 +214,47 @@ def lnProb(params,star):
     else:
         return -inf, model
 
-def report(name,dist):
-    print("len("+name+")=", len(dist))
-    print("min   = ",min(dist))
-    print("mean  = ",mean(dist))
-    print("sigma = ",std(dist))
-    print("max   = ",max(dist))
-    print()
-
-def run_emcee(s):
-    print(s.ID)
-    #each thread has an independent random number sequence
-    seed() 
-
-    #for a, typically 2 is a good number; must be > 1
-    nwalkers=100
-    nburn=100
-    nrun=400
-    ndim=3
-    my_a=3 #typically 2
-
-    age_guess=7.0
-    mass_guess=0.8
-    feh_guess=s.FeH+1e-5
-
-    guess=array([age_guess,mass_guess,feh_guess])
-    print(' guess = ', guess)
-    p0=[guess*(1-0.2*(0.5-rand(ndim))) for i in range(nwalkers)]
-
-    #create an instance 
-    sampler=emcee.EnsembleSampler(nwalkers,ndim,lnProb,args=[s],a=my_a)
-
-    #burn-in: save end state and reset
-    pos,prob,state,blob=sampler.run_mcmc(p0,nburn)
-    sampler.reset()
-
-    #main run
-    sampler.run_mcmc(pos,nrun)
-    lnp_flat=sampler.flatlnprobability
-
-    #print basic results
-    print()
-    print("Result: ", s.ID)
-    print("Mean acceptance fraction: {0:10.4g}".format(mean(sampler.acceptance_fraction)))
-
-    Teff_dist=[]
-    logg_dist=[]
-    kmag_dist=[]
-    for i in range(nrun):
-        for j in range(nwalkers):
-            Teff_dist.append(sampler.blobs[i][j][0])
-            logg_dist.append(sampler.blobs[i][j][1])
-            kmag_dist.append(sampler.blobs[i][j][3])
-
-    logg_dist=array(logg_dist)
-    Teff_dist=array(Teff_dist)
-    kmag_dist=array(kmag_dist)
-
-    age_dist=sampler.flatchain[:,0]
-    report("age",age_dist)
-    mass_dist=sampler.flatchain[:,1]
-    report("mass",mass_dist)
-    feh_dist = sampler.flatchain[:,2]
-    report("feh",feh_dist)
-    report("kmag",kmag_dist)
-
-    #gotta transpose!
-    covariance=cov(sampler.flatchain.T)
-
-    if False:
-        result=[]
-
-        good=where( (lnp_flat>-15)& (kmag_dist!=99.99) & (logg_dist!=99.99) & (Teff_dist!=0) )
-
-        print(good)
-        
-        if len(good)==0:
-            logg_dist=logg_dist[0:0]
-            Teff_dist=Teff_dist[0:0]
-            kmag_dist=kmag_dist[0:0]
-            age_dist=age_dist[0:0]
-            mass_dist=mass_dist[0:0]
-            feh_dist=feh_dist[0:0]
-            lnp_flat=lnp_flat[0:0]
-        else:
-            logg_dist=logg_dist[good]
-            Teff_dist=Teff_dist[good]
-            kmag_dist=kmag_dist[good]
-            age_dist=age_dist[good]
-            mass_dist=mass_dist[good]
-            feh_dist=feh_dist[good]
-            lnp_flat=lnp_flat[good]
-
-        result.append(age_guess)
-        if len(age_dist)>0: 
-            pct=prctile(age_dist,p=[2.5,50,97.5])
-            result.append(mean(age_dist))
-            result.append(std(age_dist))
-            result.append(pct[0]) #2.5%
-            result.append(pct[1]) #50%
-            result.append(pct[2]) #97.5%
-        else:
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-
-        result.append(mass_guess)
-        if len(mass_dist)>0:
-            pct=prctile(mass_dist,p=[2.5,50,97.5])
-            result.append(mean(mass_dist))
-            result.append(std(mass_dist))
-            result.append(pct[0]) #2.5th percentile
-            result.append(pct[1]) #50th percentile==median
-            result.append(pct[2]) #97.5%
-        else:
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-
-        if len(Teff_dist) > 0:
-            pct=prctile(Teff_dist,p=[2.5,50,97.5])
-            result.append(mean(Teff_dist))
-            result.append(std(Teff_dist))
-            result.append(pct[0])
-            result.append(pct[1])
-            result.append(pct[2])
-        else:
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-
-        if len(logg_dist) > 0:
-            pct=prctile(logg_dist,p=[2.5,50,97.5])
-            result.append(mean(logg_dist))
-            result.append(std(logg_dist))
-            result.append(pct[0])
-            result.append(pct[1])
-            result.append(pct[2])
-        else:
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)
-
-        if len(kmag_dist)>0: 
-            pct=prctile(kmag_dist,p=[2.5,50,97.5])
-            print('mean kmag')
-            print(mean(kmag_dist))
-            result.append(mean(kmag_dist))
-            result.append(std(kmag_dist))
-            result.append(pct[0]) #2.5%
-            result.append(pct[1]) #50%
-            result.append(pct[2]) #97.5%
-        else:
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)
-            result.append(99.0)        
-
-        if len(feh_dist)>0:
-            mean_feh = mean(feh_dist)
-            std_feh = std(feh_dist)
-            pct=prctile(feh_dist,p=[2.5,50,97.5])
-            result.append(mean_feh)
-            result.append(std_feh)
-            result.append(pct[0]) #5th percentile
-            result.append(pct[1]) #50th percentile==median
-            result.append(pct[2]) #95%
-
-        else:
-            mean_feh = 0.0
-            std_feh = 0.0
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-            result.append(0.0)
-
-    return age_dist, mass_dist, feh_dist, lnp_flat, covariance
 
 
+if __name__ == '__main__':
+
+    iso_dir='/home/dotter/science/mcmc/iso'
+    iso_list=['fehm25afep6.UBVRIJHKsKp',
+              'fehm20afep4.UBVRIJHKsKp',
+              'fehm15afep4.UBVRIJHKsKp',
+              'fehm10afep4.UBVRIJHKsKp',
+              'fehm05afep2.UBVRIJHKsKp',          
+              'fehp00afep0.UBVRIJHKsKp',
+              'fehp02afep0.UBVRIJHKsKp',
+              'fehp03afep0.UBVRIJHKsKp',
+              'fehp05afep0.UBVRIJHKsKp']
+    y=[]
+    for iso in iso_list:
+        y.append(DSED_Isochrones(iso_dir+'/'+iso))
 
 
-iso_dir='/home/dotter/science/mcmc/iso'
-iso_list=['fehm25afep6.UBVRIJHKsKp',
-          'fehm20afep4.UBVRIJHKsKp',
-          'fehm15afep4.UBVRIJHKsKp',
-          'fehm10afep4.UBVRIJHKsKp',
-          'fehm05afep2.UBVRIJHKsKp',          
-          'fehp00afep0.UBVRIJHKsKp',
-          'fehp02afep0.UBVRIJHKsKp',
-          'fehp03afep0.UBVRIJHKsKp',
-          'fehp05afep0.UBVRIJHKsKp']
-y=[]
-for iso in iso_list:
-    y.append(DSED_Isochrones(iso_dir+'/'+iso))
+    x=star()
+    x.Teff=5777; x.sigma_Teff=3.
+    x.logg=4.4;  x.sigma_logg=0.03
+    x.FeH=0.0;   x.sigma_FeH=0.01
+    x.Kmag=3.302; x.sigma_Kmag=0.005
+    x.delta_nu = 135.1; x.sigma_delta_nu=0.1
+    x.nu_max = 3090.0; x.sigma_nu_max=30
+
+    covariance=zeros((6,6))
+    covariance[0,0]=pow(x.sigma_Teff,2)
+    covariance[1,1]=pow(x.sigma_logg,2)
+    covariance[2,2]=pow(x.sigma_FeH,2)
+    covariance[3,3]=pow(x.sigma_Kmag,2)
+    covariance[4,4]=pow(x.sigma_delta_nu,2)
+    covariance[5,5]=pow(x.sigma_nu_max,2)
+    #add off diagonal terms as needed...
+
+    x.set_covariance_matrix(covariance)
+    x.pack()
+    x.run_emcee(nwalkers=100,nrun=250)
+
+
+    C=cov(x.sampler.flatchain.T)
+
+    print(matrix(C))
