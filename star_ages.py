@@ -189,6 +189,13 @@ def lnProb(params,star):
     else:
         return -inf, model
 
+def report(name,dist):
+    print("len("+name+")=", len(dist))
+    print("min   = ",min(dist))
+    print("mean  = ",mean(dist))
+    print("sigma = ",std(dist))
+    print("max   = ",max(dist))
+    print()
 
 def run_emcee(s):
     print(s.ID)
@@ -196,9 +203,9 @@ def run_emcee(s):
     seed() 
 
     #for a, typically 2 is a good number; must be > 1
-    nwalkers=200
+    nwalkers=100
     nburn=100
-    nrun=500
+    nrun=400
     ndim=3
     my_a=3 #typically 2
 
@@ -221,6 +228,11 @@ def run_emcee(s):
     sampler.run_mcmc(pos,nrun)
     lnp_flat=sampler.flatlnprobability
 
+    #print basic results
+    print()
+    print("Result: ", s.ID)
+    print("Mean acceptance fraction: {0:10.4g}".format(mean(sampler.acceptance_fraction)))
+
     Teff_dist=[]
     logg_dist=[]
     kmag_dist=[]
@@ -228,52 +240,30 @@ def run_emcee(s):
         for j in range(nwalkers):
             Teff_dist.append(sampler.blobs[i][j][0])
             logg_dist.append(sampler.blobs[i][j][1])
-            kmag_dist.append(sampler.blobs[i][j][2])
+            kmag_dist.append(sampler.blobs[i][j][3])
 
     logg_dist=array(logg_dist)
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
 
-    #print basic results
-    print()
-    print("Result: ", s.ID)
-    print("Mean acceptance fraction: {0:10.4g}".format(mean(sampler.acceptance_fraction)))
-
-    result=[]
-
     age_dist=sampler.flatchain[:,0]
-    print("len(age_dist)=", len(age_dist))
-    print(min(age_dist))
-    print(mean(age_dist))
-    print(std(age_dist))
-    print(max(age_dist))
-
+    report("age",age_dist)
     mass_dist=sampler.flatchain[:,1]
-    print("len(mass_dist)=", len(mass_dist))
-    print(min(mass_dist))
-    print(mean(mass_dist))
-    print(std(mass_dist))
-    print(max(mass_dist))
-    print("len(mass_dist)=", len(mass_dist))
-
+    report("mass",mass_dist)
     feh_dist = sampler.flatchain[:,2]
-    print("len(feh_dist)=", len(feh_dist))
-    print(min(feh_dist))
-    print(mean(feh_dist))
-    print(std(feh_dist))
-    print(max(feh_dist))
-    print("len(feh_dist)=", len(feh_dist))
+    report("feh",feh_dist)
+    report("kmag",kmag_dist)
 
-    print("len(kmag_dist)=", len(kmag_dist))
-    print(min(kmag_dist))
-    print(max(kmag_dist))
-    print("len(kmag_dist)=", len(kmag_dist))
+    #gotta transpose!
+    covariance=cov(sampler.flatchain.T)
 
     if False:
+        result=[]
+
         good=where( (lnp_flat>-15)& (kmag_dist!=99.99) & (logg_dist!=99.99) & (Teff_dist!=0) )
 
         print(good)
-
+        
         if len(good)==0:
             logg_dist=logg_dist[0:0]
             Teff_dist=Teff_dist[0:0]
@@ -384,7 +374,7 @@ def run_emcee(s):
             result.append(0.0)
             result.append(0.0)
 
-    return age_dist, mass_dist, feh_dist, lnp_flat
+    return age_dist, mass_dist, feh_dist, lnp_flat, covariance
 
 
 

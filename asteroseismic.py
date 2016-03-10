@@ -1,3 +1,4 @@
+from numpy import sqrt
 #reference values; Teff from IAU 2015 Resolution B3
 delta_nu_sol = 135.1
 nu_max_sol = 3090.0

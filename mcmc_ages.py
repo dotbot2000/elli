@@ -500,6 +500,8 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     Teff_dist=[]
     logg_dist=[]
     kmag_dist=[]
+    delta_nu_dist=[]
+    nu_max_list=[]
     for i in range(nrun):
         for j in range(nwalkers):
             Teff_dist.append(sampler.blobs[i][j][0])
