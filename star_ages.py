@@ -309,13 +309,14 @@ if __name__ == '__main__':
     print('std  Fe/H= ', std(z.sampler.flatchain[:,2]))
 
 
-    from multiprocessing import Process
+    if False:
+        from multiprocessing import Process
 
-    #read data from files or whatever into a list of stars() called star_data
-    #but don't be greedy about memory!
+        #read data from files or whatever into a list of stars() called star_data
+        #but don't be greedy about memory!
 
-    max_threads=4
-    for thread in range(max_threads):
-        p=Process(target=do_run_emcee, args=(star_data,thread,max_threads))
-        p.start()
-    p.join()
+        max_threads=4
+        for thread in range(max_threads):
+            p=Process(target=do_run_emcee, args=(star_data,thread,max_threads))
+            p.start()
+        p.join()
