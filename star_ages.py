@@ -87,7 +87,7 @@ class star:
         #initial guess for this star
         age_guess=7.0
         mass_guess=0.8
-        feh_guess=self.FeH+1e-5
+        feh_guess=self.FeH
 
         guess=array([age_guess,mass_guess,feh_guess])
         self.initial_guess = guess
@@ -232,29 +232,90 @@ if __name__ == '__main__':
     for iso in iso_list:
         y.append(DSED_Isochrones(iso_dir+'/'+iso))
 
+    if False:
+        print("Example: Sun")
+        x=star()
+        x.Teff=5777; x.sigma_Teff=3.
+        x.logg=4.4;  x.sigma_logg=0.03
+        x.FeH=0.0;   x.sigma_FeH=0.01
+        x.Kmag=3.302; x.sigma_Kmag=0.005
+        x.delta_nu = 135.1; x.sigma_delta_nu=0.1
+        x.nu_max = 3090.0; x.sigma_nu_max=30
 
-    x=star()
-    x.Teff=5777; x.sigma_Teff=3.
-    x.logg=4.4;  x.sigma_logg=0.03
-    x.FeH=0.0;   x.sigma_FeH=0.01
-    x.Kmag=3.302; x.sigma_Kmag=0.005
-    x.delta_nu = 135.1; x.sigma_delta_nu=0.1
-    x.nu_max = 3090.0; x.sigma_nu_max=30
+        covariance=zeros((6,6))
+        covariance[0,0]=pow(x.sigma_Teff,2)
+        covariance[1,1]=pow(x.sigma_logg,2)
+        covariance[2,2]=pow(x.sigma_FeH,2)
+        covariance[3,3]=pow(x.sigma_Kmag,2)
+        covariance[4,4]=pow(x.sigma_delta_nu,2)
+        covariance[5,5]=pow(x.sigma_nu_max,2)
+        #add off diagonal terms as needed...
 
-    covariance=zeros((6,6))
-    covariance[0,0]=pow(x.sigma_Teff,2)
-    covariance[1,1]=pow(x.sigma_logg,2)
-    covariance[2,2]=pow(x.sigma_FeH,2)
-    covariance[3,3]=pow(x.sigma_Kmag,2)
-    covariance[4,4]=pow(x.sigma_delta_nu,2)
-    covariance[5,5]=pow(x.sigma_nu_max,2)
-    #add off diagonal terms as needed...
-
-    x.set_covariance_matrix(covariance)
-    x.pack()
-    x.run_emcee(nwalkers=100,nrun=250)
+        x.set_covariance_matrix(covariance)
+        x.pack()
+        x.run_emcee(nwalkers=100,nrun=250)
 
 
-    C=cov(x.sampler.flatchain.T)
+        C=cov(x.sampler.flatchain.T)
 
-    print(matrix(C))
+        print(matrix(C))
+        print('mean age = ', mean(x.sampler.flatchain[:,0]))
+        print('std  age = ', std(x.sampler.flatchain[:,0]))
+        print('mean mass= ', mean(x.sampler.flatchain[:,1]))
+        print('std  mass= ', std(x.sampler.flatchain[:,1]))
+        print('mean Fe/H= ', mean(x.sampler.flatchain[:,2]))
+        print('std  Fe/H= ', std(x.sampler.flatchain[:,2]))
+
+
+    print("\nExample: GALAH+Cannon+covariance")
+    w=star()
+    w.Teff=6224.146
+    w.logg=3.78807
+    w.FeH=-0.7095807
+    cov=array([[  1.37034154e+01,   2.54319931e-03,   7.33258078e-03],
+               [  2.54319931e-03,   6.03449909e-05,  -5.09215250e-07],
+               [  7.33258078e-03,  -5.09215250e-07,   1.39315419e-05]])
+    w.pack()
+    w.set_covariance_matrix(cov)
+    w.run_emcee(nwalkers=100,nrun=250)
+    
+
+    print('mean age = ', mean(w.sampler.flatchain[:,0]))
+    print('std  age = ', std(w.sampler.flatchain[:,0]))
+    print('mean mass= ', mean(w.sampler.flatchain[:,1]))
+    print('std  mass= ', std(w.sampler.flatchain[:,1]))
+    print('mean Fe/H= ', mean(w.sampler.flatchain[:,2]))
+    print('std  Fe/H= ', std(w.sampler.flatchain[:,2]))
+
+
+
+    print("\nExample: GALAH+Cannon+ no covariance")
+    z=star()
+    z.Teff=6224.146
+    z.logg=3.78807
+    z.FeH=-0.7095807
+    cov=array([[  1.37034154e+01,              0.0,              0.0],
+               [             0.0,   6.03449909e-05,              0.0],
+               [             0.0,              0.0,   1.39315419e-05]])
+    z.pack()
+    z.set_covariance_matrix(cov)
+    z.run_emcee(nwalkers=100,nrun=250)
+
+    print('mean age = ', mean(z.sampler.flatchain[:,0]))
+    print('std  age = ', std(z.sampler.flatchain[:,0]))
+    print('mean mass= ', mean(z.sampler.flatchain[:,1]))
+    print('std  mass= ', std(z.sampler.flatchain[:,1]))
+    print('mean Fe/H= ', mean(z.sampler.flatchain[:,2]))
+    print('std  Fe/H= ', std(z.sampler.flatchain[:,2]))
+
+
+    from multiprocessing import Process
+
+    #read data from files or whatever into a list of stars() called star_data
+    #but don't be greedy about memory!
+
+    max_threads=4
+    for thread in range(max_threads):
+        p=Process(target=do_run_emcee, args=(star_data,thread,max_threads))
+        p.start()
+    p.join()
