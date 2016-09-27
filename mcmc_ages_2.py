@@ -13,15 +13,15 @@ import Isochrones
 import emcee
 from Isochrones import DSED_Isochrones
 from numpy import *
-import pickle
 import scipy
 from scipy.spatial.distance import cdist
 import csv
 from astropy import units as u
 
+
 include_teff=1
 include_logg=1
-include_kmag=1
+include_kmag=0
 include_feh=1
 mask=array([include_teff,include_logg,include_kmag,include_feh])
 
@@ -42,27 +42,74 @@ y=[]
 for iso in iso_list:
     y.append(DSED_Isochrones(iso_dir+'/'+iso))
 
-pp=pickle.load(open('iso_grid2.p','rb'))
-feh,ages,hr=pp[0],pp[1],array(pp[2])
-  
-def age_mass_guess(teff,logg,iso):
-	mass_guesses=[]
-	dists=[]
-	for i in range(len(iso)):
-		x=array([[teff,logg]]*len(iso[0]))
-		y=iso[i][:,:2]
-		d=scipy.spatial.distance.cdist(x,y)
-		da=argmin(d[0,:])
-		dists.append(min(d[0,:]))
-		mass_guesses.append(iso[i][:,-2][da])
-	dd=argmin(dists)
-	dists=array(dists)
-	want=argsort(dists)[:2]
-	weights=(1/dists[want]) / sum(1/dists[want])
-	ageg=sum(ages[want]*weights)
-	return ageg,mass_guesses[dd]
+feh=[i.FeH for i in y]
+
+def age_mass_guess(iso_set, value, sigma):
+    def lnProb_guess(value,sigma,model):
+        norm_guess=log(sqrt( twopi4 * prod(pow(sigma[nonzero(mask)],2))))
+        return -sum(mask*  pow( (value-model)/sigma, 2)) - norm_guess
+
+    #empty storage
+    lnP_guess=[]
+    for isoc in iso_set.data:
+        p=[]
+        #for each point in the isochrone, calculate ln(P)
+        for star in isoc:
+            model=array([pow(10,star['LogTeff']), star['LogG'], star['Ks      '], iso_set.FeH ])
+            p.append(lnProb_guess(value,sigma,model))
+        lnP_guess.append(p)
+
+    lnP_guess=array(lnP_guess)
+    mass_guess=0.0
+    age_guess=0.0
+    norm_guess=0.0
+
+    #now do a weighted sum of mass and age
+    for i in range(len(iso_set.data)):
+        iso=iso_set.data[i]
+        iso_age=iso_set.ages[i]
+        p=exp(lnP_guess[i])
+        for j in range(len(iso)):
+            age_guess+=iso_age*p[j]
+            mass_guess+=iso['M_Mo'][j]*p[j]
+            norm_guess+=p[j]
+    mass_guess = mass_guess/norm_guess
+    age_guess = age_guess/norm_guess
+    return age_guess, mass_guess
+
+def do_age_mass_guess(value,sigma,y=y):
+    FeH=value[3]
+    if FeH>=feh[-1]:
+        print('metallicity outside the isochrone range, returning 5Gyr & 1M_o ')
+        return(5,1)
+    if FeH<=feh[0]:
+        print('metallicity outside the isochrone range, returning 5Gyr & 1M_o ')
+        return(5,1)
+    if y[0].FeH <= FeH <= y[-1].FeH:
+        for i in range(len(y)):
+            if y[i].FeH <= FeH < y[i+1].FeH: 
+                iy=i #index of the iso set closest in feh
+                break
+        ageg0=[]; massg0=[]
+        for x in y[iy:iy+2]:
+            ageg1,massg1=age_mass_guess(x, value, sigma)
+            if isnan(ageg1) ==False and isnan(massg1)==False:
+                ageg0.append(ageg1)
+                massg0.append(massg1)
+        if len(ageg0)>1:
+            ageg=interp([y[iy].FeH,y[iy+1].FeH],[ageg0[0],ageg0[1]])(value[3])
+            massg=interp([y[iy].FeH,y[iy+1].FeH],[massg0[0],massg0[1]])(value[3])
+            return(ageg,massg)
+        if len(ageg0)==0:
+            print('no starting guesses found, returning 5Gyr & 1M_o')
+            return(5,1)
+        else:
+            return(ageg0[0],massg0[0])
+
 
 def parallax_distance(parallax,err_parallax): #both in mas
+    if include_kmag==0:
+        return 1,1
     d=(parallax*u.mas).to(u.parsec, equivalencies=u.parallax())
     d=d.value 
     sigma_d=abs(d*err_parallax/float(parallax))
@@ -76,7 +123,6 @@ def Kmag_from_distance(kmag,err_kmag,d,err_d):
     return Kmag, sigma_Kmag #absolute kmag
 
 def interp(x,y):
-    #return interp1d(x=x,y=y,kind='nearest')
     return interp1d(x=x,y=y,kind='linear')
 
 def get_one_star(age,mass,x):
@@ -88,11 +134,10 @@ def get_one_star(age,mass,x):
                 i0=i
                 i1=i+1
                 break
-        #linear age interpolation
-        m0=x.data[i0]['M_Mo']
+        m0=x.data[i0]['M_Mo'] #x.data[i0,i1] are the closest isos in age
         m1=x.data[i1]['M_Mo']
         if m0[0] <= mass <= m0[-1] and m1[0] <= mass <= m1[-1]:
-            T0=interp(m0,x.data[i0]['LogTeff'])(mass)
+            T0=interp(m0,x.data[i0]['LogTeff'])(mass) 
             T1=interp(m1,x.data[i1]['LogTeff'])(mass)
 
             g0=interp(m0,x.data[i0]['LogG'])(mass)
@@ -103,6 +148,7 @@ def get_one_star(age,mass,x):
 
             alfa=(age-x.ages[i0])/(x.ages[i1]-x.ages[i0])
             beta=1.0-alfa
+
             Teff=alfa*pow(10,T1) + beta*pow(10,T0)
             logg=alfa*g1 + beta*g0
             Kmag=alfa*K1 + beta*K0
@@ -115,14 +161,13 @@ def get_one_star(age,mass,x):
 def get_star(age,mass,FeH,y):
     ok=False
     params=[]
-    #y is a sorted list of isochrones ordered by increasing [Fe/H]
-    if y[0].FeH <= FeH <= y[-1].FeH: 
+    #params=[0,0,0]
+    if y[0].FeH <= FeH <= y[-1].FeH:
         met=[]; Teff=[];  Kmag=[] ; logg=[] #CCCCCHANGED!
         for i in range(len(y)):
             if y[i].FeH <= FeH < y[i+1].FeH: 
-                iy=i
+                iy=i #index of the iso set closest in feh
                 break
-
         for x in y[iy:iy+2]:
             ok,params=get_one_star(age,mass,x)
             if ok:
@@ -157,16 +202,14 @@ def lnPrior(m):
 
 def lnProb(value,sigma,age,mass,feh):
     ok,model=get_star(age,mass,feh,y)
-    #model = [Teff, logg, Kmag, FeH]
     if ok:
         norm=log(sqrt( twopi4 * prod( pow(sigma[nonzero(mask)] ,2))))
-        return lnPrior(mass) -0.5* sum( mask * pow( (value-model)/sigma, 2) ) + norm, model
-
+        probb=lnPrior(mass) -0.5* sum( mask * pow( (value-model)/sigma, 2) ) + norm
+        return probb, model
     else:
         return -inf, array([0,99.99,99.99,99.99])
 
 
-#def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,ID,star_data):
 def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,star_data): #kmagS,ekmagS=app kmag
     print(star_data[ID])
     seed() #each thread has an independent random number sequence
@@ -191,23 +234,22 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
         sigma=array([eTeffS,eloggS,ekmag_S,eFehS])
     print(value)
     print(sigma)
-    ciso=hr[argmin(abs(feh-FeH))]
-    ageg,massg=age_mass_guess(star_data[TeffS],star_data[loggS],ciso)
+    ageg,massg=do_age_mass_guess(value,sigma)
     sampler=None
 
     #for a, typically 2 is a good number; must be > 1
     nwalkers=200
-    nburn=100
+    nburn=200
     nrun=500
     ndim=3
-    my_a=2. #2.
+    my_a=2 #2.
 
     guess=array([ageg,massg,star_data[FehS]])
     print(' guess = ', guess)
 
     if guess[-1]==0:
         guess=array([guess[0],guess[1],guess[2]+0.001])
-    p0=[guess*(1-0.1*(0.5-rand(ndim))) for i in range(nwalkers)]
+    p0=[guess*(1-0.4*(0.5-rand(ndim))) for i in range(nwalkers)]
 
     #create an instance 
     sampler=emcee.EnsembleSampler(nwalkers,ndim,lnP,args=[value,sigma],a=my_a)
@@ -223,8 +265,8 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     Teff_dist=[]
     logg_dist=[]
     kmag_dist=[]
-    for i in range(nrun):
-        for j in range(nwalkers):
+    for j in range(nwalkers):
+        for i in range(nrun):
             Teff_dist.append(sampler.blobs[i][j][0])
             logg_dist.append(sampler.blobs[i][j][1])
             kmag_dist.append(sampler.blobs[i][j][2])
@@ -233,9 +275,6 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
 
-    # logg_dist=logg_dist[squeeze(where( Teff_dist>2000.0))]
-    # Teff_dist=Teff_dist[squeeze(where(Teff_dist>2000.0))]
-    # kmag_dist=kmag_dist[squeeze(where( (kmag_dist>-20.0) & (kmag_dist<20.0)))]
 
     #print basic results
     print()
@@ -245,25 +284,21 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    #print(age_dist)
     print("len(age_dist)=", len(age_dist))
     print(min(age_dist))
     print(max(age_dist))
- #   age_dist = age_dist[where((age_dist < 15)&(age_dist>0))]
     print("len(age_dist)=", len(age_dist))
 
     mass_dist=sampler.flatchain[:,1]
     print("len(mass_dist)=", len(mass_dist))
     print(min(mass_dist))
     print(max(mass_dist))
- #   mass_dist= mass_dist[where((mass_dist < 5)&(mass_dist>0.5))]
     print("len(mass_dist)=", len(mass_dist))
 
     feh_dist = sampler.flatchain[:,2]
     print("len(feh_dist)=", len(feh_dist))
     print(min(feh_dist))
     print(max(feh_dist))
- #   feh_dist = feh_dist[where((feh_dist>=-2.5)&(feh_dist<0.5))]
     print("len(feh_dist)=", len(feh_dist))
 
     print("len(kmag_dist)=", len(kmag_dist))
@@ -383,11 +418,9 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
         result.append(0.0)
         result.append(0.0)
     result.append(mean(sampler.acceptance_fraction))
-    #return (array(result),sampler.flatchain,sampler.blobs)
     return array(result)
 
 def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,kmagS,ekmagS,parallaxS,eparallaxS,ID,my_thread=1,max_thread=1):
-#def do_run_emcee(my_thread=1,max_thread=1):
     max_stars = len(data)
     begin,end,increment = my_thread,max_stars,max_thread 
 
@@ -417,7 +450,6 @@ def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,k
     #done writing
     f.close()
 
-#def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,ID,star_data):
 def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,star_data): #kmagS,ekmagS=app kmag
 
     print(star_data[ID])
@@ -434,35 +466,31 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     else:
         kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],ekmagS,distance,err_distance)
 
-    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]]) #CCCCCHANGED!!!!
-    #value=array([star_data[TeffS],kmag_S,star_data[FehS]])
+    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]]) 
     print(value)
     if type(eTeffS)==str:
-        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) #CCCCCHANGED!!!!
-        #sigma=array([star_data[eTeffS],ekmag_S,star_data[eFehS]]) 
+        sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) 
 
     else:
-        sigma=array([eTeffS,eloggS,ekmag_S,eFehS]) #CCCCCHANGED!!!!
-        #sigma=array([eTeffS,ekmag_S,eFehS])
+        sigma=array([eTeffS,eloggS,ekmag_S,eFehS]) 
     print(sigma)
 
-    ciso=hr[argmin(abs(feh-FeH))]
-    ageg,massg=age_mass_guess(star_data[TeffS],star_data[loggS],ciso)
+    ageg,massg=do_age_mass_guess(value,sigma)
 
     sampler=None
 
     #for a, typically 2 is a good number; must be > 1
     nwalkers=200
-    nburn=100
+    nburn=200
     nrun=500
     ndim=3
-    my_a=2.
+    my_a=2
 
     guess=array([ageg,massg,star_data[FehS]])
     print(' guess = ', guess)
     if guess[-1]==0:
         guess=array([guess[0],guess[1],guess[2]+0.001])
-    p0=[guess*(1-0.25*(0.5-rand(ndim))) for i in range(nwalkers)]
+    p0=[guess*(1-0.4*(0.5-rand(ndim))) for i in range(nwalkers)]
 
     #create an instance 
     sampler=emcee.EnsembleSampler(nwalkers,ndim,lnP,args=[value,sigma],a=my_a)
@@ -478,31 +506,24 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     min_w,min_s=unravel_index(lnp.argmin(),lnp.shape) #min lnp step+walker
     mode=chain[min_w,min_s] #min lnp for age,mass,feh
     lnp_flat=sampler.flatlnprobability
-
-    #for jjj in range(len(lnp_flat)):
-    #    print(sampler.flatchain[jjj],lnp_flat[jjj])
-    #import pickle
-    #print(len(sampler.flatchain))
-    #pickle.dump((sampler.flatchain,chain.reshape((nwalkers*nrun,ndim)),lnp.reshape(nwalkers*nrun,1)),open('test.p','wb'))
     
     Teff_dist=[]
     logg_dist=[]
     kmag_dist=[]
-    for i in range(nrun):
-        for j in range(nwalkers):
-            Teff_dist.append(sampler.blobs[i][j][0])
+    for j in range(nwalkers):
+        for i in range(nrun):
             logg_dist.append(sampler.blobs[i][j][1])
+            Teff_dist.append(sampler.blobs[i][j][0])
             kmag_dist.append(sampler.blobs[i][j][2])
 
     logg_dist=array(logg_dist)
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
-    # import pickle
-    # pickle.dump((Teff_dist,logg_dist,kmag_dist),open('test.p','wb'))
+#    import pickle
+#    pickle.dump((sampler.chain,sampler.blobs,sampler.lnprobability,sampler.flatlnprobability,sampler.flatchain,array([Teff_dist,logg_dist,kmag_dist]),p0),open('test_34028.p','wb'))
 
-    #logg_dist=logg_dist[squeeze(where(Teff_dist>2000.0))]
-    #Teff_dist=Teff_dist[squeeze(where(Teff_dist>2000.0))]
-    #kmag_dist=kmag_dist[squeeze(where( (kmag_dist>-20.0) & (kmag_dist<20.0)))]
+    print('acor:')
+    print (sampler.acor)
  
     #print basic results
     print()
@@ -513,22 +534,18 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    #print(age_dist)
     print("len(age_dist)=", len(age_dist))
     print(min(age_dist),max(age_dist),mean(age_dist))
-    #age_dist = age_dist[where((age_dist < 15)&(age_dist>0))]
     print("len(age_dist)=", len(age_dist))
 
     mass_dist=sampler.flatchain[:,1]
     print("len(mass_dist)=", len(mass_dist))
     print(min(mass_dist),max(mass_dist),mean(mass_dist))
-    #mass_dist= mass_dist[where((mass_dist < 5)&(mass_dist>0.5))]
     print("len(mass_dist)=", len(mass_dist))
 
     feh_dist = sampler.flatchain[:,2]
     print("len(feh_dist)=", len(feh_dist))
     print(min(feh_dist),max(feh_dist),mean(feh_dist))
-    #feh_dist = feh_dist[where((feh_dist>=-2.5)&(feh_dist<0.5))]
     print("len(feh_dist)=", len(feh_dist))
 
     print("len(kmag_dist)=", len(kmag_dist))
@@ -651,10 +668,8 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result.append(mode[2])#feh
     result.append(mean(sampler.acceptance_fraction))
 
-    #return (array(result),sampler.flatchain,sampler.blobs)
     return(array(result),age_dist,mass_dist,Teff_dist,logg_dist,kmag_dist,feh_dist,lnp_flat)
 
-#def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,ID ,my_thread=1,max_thread=1):
 def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,my_thread=1,max_thread=1):
 
     max_stars = len(data)
