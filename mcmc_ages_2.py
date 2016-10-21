@@ -26,7 +26,7 @@ include_feh=1
 mask=array([include_teff,include_logg,include_kmag,include_feh])
 
 #constants
-twopi4=pow(2*pi,4) #(2*pi)^4
+#twopi4=pow(2*pi,4) #(2*pi)^4
 
 iso_dir='/priv/coala/jlin/mcmc/iso2'
 iso_list=['fehm25afep6.UBVRIJHKsKp',
@@ -46,7 +46,7 @@ feh=[i.FeH for i in y]
 
 def age_mass_guess(iso_set, value, sigma):
     def lnProb_guess(value,sigma,model):
-        norm_guess=log(sqrt( twopi4 * prod(pow(sigma[nonzero(mask)],2))))
+        norm_guess=log(sqrt( (2*pi)**(sum(mask)) * prod(pow(sigma[nonzero(mask)],2))))
         return -sum(mask*  pow( (value-model)/sigma, 2)) - norm_guess
 
     #empty storage
@@ -203,8 +203,8 @@ def lnPrior(m):
 def lnProb(value,sigma,age,mass,feh):
     ok,model=get_star(age,mass,feh,y)
     if ok:
-        norm=log(sqrt( twopi4 * prod( pow(sigma[nonzero(mask)] ,2))))
-        probb=lnPrior(mass) -0.5* sum( mask * pow( (value-model)/sigma, 2) ) + norm
+        norm=log(sqrt((2*pi)**(sum(mask))* prod( pow(sigma[nonzero(mask)] ,2))))
+        probb=lnPrior(mass) -0.5* sum( mask * pow( (value-model)/sigma, 2) ) - norm
         return probb, model
     else:
         return -inf, array([0,99.99,99.99,99.99])
