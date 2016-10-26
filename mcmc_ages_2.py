@@ -2,13 +2,6 @@ from __future__ import print_function
 from matplotlib.mlab import prctile
 from numpy.random import rand, seed
 from scipy.interpolate import interp1d 
-
-Isochrones = '/home/dotter/lib/python/Isochrones.py'
-emcee='/home/jlin/emcee/dfm-emcee-6779c01/emcee'
-import os
-import sys
-sys.path.append(os.path.dirname(os.path.expanduser(Isochrones)))
-sys.path.append(os.path.dirname(os.path.expanduser(emcee)))
 import Isochrones
 import emcee
 from Isochrones import DSED_Isochrones
@@ -18,17 +11,16 @@ from scipy.spatial.distance import cdist
 import csv
 from astropy import units as u
 
+with open("run_mcmc.py") as myfile:
+    head = [next(myfile) for x in xrange(8)]
 
-include_teff=1
-include_logg=1
-include_kmag=0
-include_feh=1
+include_teff=int(head[1].split('=')[1][:-1])
+include_logg=int(head[2].split('=')[1][:-1])
+include_kmag=int(head[3].split('=')[1][:-1])
+include_feh=int(head[4].split('=')[1][:-1])
 mask=array([include_teff,include_logg,include_kmag,include_feh])
 
-#constants
-#twopi4=pow(2*pi,4) #(2*pi)^4
-
-iso_dir='/priv/coala/jlin/mcmc/iso2'
+iso_dir='iso2'
 iso_list=['fehm25afep6.UBVRIJHKsKp',
           'fehm20afep4.UBVRIJHKsKp',
           'fehm15afep4.UBVRIJHKsKp',
@@ -215,37 +207,29 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     seed() #each thread has an independent random number sequence
     FeH=star_data[FehS]
 
-    if type(eparallaxS)==str:
+    if include_kmag==0: #no kmag 
+        value=array([star_data[TeffS],star_data[loggS],10,star_data[FehS]])
+        sigma=array([star_data[eTeffS],star_data[eloggS],10,star_data[eFehS]]) 
+
+    else: #with kmag
         distance,err_distance=parallax_distance(star_data[parallaxS],star_data[eparallaxS])
-    else:
-        distance,err_distance=parallax_distance(star_data[parallaxS],eparallaxS)
-
-    if type(ekmagS)==str:
         kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],star_data[ekmagS],distance,err_distance)
-    else:
-        kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],ekmagS,distance,err_distance)
-
-    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]])
- 
-
-    if type(eTeffS)==str:
+        value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]])
         sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) 
-    else:
-        sigma=array([eTeffS,eloggS,ekmag_S,eFehS])
-    print(value)
-    print(sigma)
+
+    print('stellar parameters:',value,' uncertaintites:', sigma)
     ageg,massg=do_age_mass_guess(value,sigma)
     sampler=None
 
     #for a, typically 2 is a good number; must be > 1
-    nwalkers=200
-    nburn=200
-    nrun=500
+    nwalkers=int(head[5].split('=')[1][:-1])
+    nburn=int(head[6].split('=')[1][:-1])
+    nrun=int(head[7].split('=')[1][:-1])
     ndim=3
     my_a=2 #2.
 
     guess=array([ageg,massg,star_data[FehS]])
-    print(' guess = ', guess)
+    print('guess : ', guess)
 
     if guess[-1]==0:
         guess=array([guess[0],guess[1],guess[2]+0.001])
@@ -284,27 +268,8 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    print("len(age_dist)=", len(age_dist))
-    print(min(age_dist))
-    print(max(age_dist))
-    print("len(age_dist)=", len(age_dist))
-
     mass_dist=sampler.flatchain[:,1]
-    print("len(mass_dist)=", len(mass_dist))
-    print(min(mass_dist))
-    print(max(mass_dist))
-    print("len(mass_dist)=", len(mass_dist))
-
     feh_dist = sampler.flatchain[:,2]
-    print("len(feh_dist)=", len(feh_dist))
-    print(min(feh_dist))
-    print(max(feh_dist))
-    print("len(feh_dist)=", len(feh_dist))
-
-    print("len(kmag_dist)=", len(kmag_dist))
-    print(min(kmag_dist))
-    print(max(kmag_dist))
-    print("len(kmag_dist)=", len(kmag_dist))
 
     good=where( (lnp_flat>-15)& (kmag_dist!=99.99) & (logg_dist!=99.99) & (Teff_dist!=0) )
 
@@ -385,8 +350,6 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
 
     if len(kmag_dist)>0: 
         pct=prctile(kmag_dist,p=[2.5,50,97.5])
-        print('mean kmag')
-        print(mean(kmag_dist))
         result.append(mean(kmag_dist))
         result.append(std(kmag_dist))
         result.append(pct[0]) #2.5%
@@ -417,7 +380,9 @@ def run_emcee(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparal
         result.append(0.0)
         result.append(0.0)
         result.append(0.0)
+    print('age:{0:.2f}+/-{1:.2f}Gyr, mass: {2:.2f}+/-{3:.2f}M_sun'.format(mean(age_dist),std(age_dist),mean(mass_dist),std(mass_dist)))
     result.append(mean(sampler.acceptance_fraction))
+
     return array(result)
 
 def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,kmagS,ekmagS,parallaxS,eparallaxS,ID,my_thread=1,max_thread=1):
@@ -426,7 +391,7 @@ def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,k
 
     filename = out_dir + '/' + out_prefix+'_'+str(begin)+'_'+str(increment)+'.dat'
     f=open(filename.strip(),'w')
-    f.write("{0:>5s}".format('HIP'))
+    f.write("{0:>5s}".format('ID'))
 
     f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}{20:>13s}{21:>13s}{22:>13s}{23:>13s}{24:>13s}{25:>13s}{26:>13s}{27:>13s}{28:>13s}{29:>13s}{30:>13s}{31:>13s}{32:>13s}{33:>13s}{34:>13s}{35:>13s}{36:>13s}{37:>13s}".format(
          'age_guess',  'age_mean',  'age_sigma',  'age_05th',  'age_median',  'age_95th',
@@ -451,38 +416,26 @@ def do_run_emcee(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,eloggS ,k
     f.close()
 
 def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,eparallaxS,ID,star_data): #kmagS,ekmagS=app kmag
-
     print(star_data[ID])
     seed() #each thread has an independent random number sequence
     FeH=star_data[FehS]
+    if include_kmag==0: #no kmag 
+        value=array([star_data[TeffS],star_data[loggS],10,star_data[FehS]])
+        sigma=array([star_data[eTeffS],star_data[eloggS],10,star_data[eFehS]]) 
 
-    if type(eparallaxS)==str:
+    else: #with kmag
         distance,err_distance=parallax_distance(star_data[parallaxS],star_data[eparallaxS])
-    else:
-        distance,err_distance=parallax_distance(star_data[parallaxS],eparallaxS)
-
-    if type(ekmagS)==str:
         kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],star_data[ekmagS],distance,err_distance)
-    else:
-        kmag_S,ekmag_S=Kmag_from_distance(star_data[kmagS],ekmagS,distance,err_distance)
-
-    value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]]) 
-    print(value)
-    if type(eTeffS)==str:
+        value=array([star_data[TeffS],star_data[loggS],kmag_S,star_data[FehS]])
         sigma=array([star_data[eTeffS],star_data[eloggS],ekmag_S,star_data[eFehS]]) 
-
-    else:
-        sigma=array([eTeffS,eloggS,ekmag_S,eFehS]) 
-    print(sigma)
-
+    print('stellar parameters:',value,' uncertaintites:', sigma)
     ageg,massg=do_age_mass_guess(value,sigma)
-
     sampler=None
 
     #for a, typically 2 is a good number; must be > 1
-    nwalkers=200
-    nburn=200
-    nrun=500
+    nwalkers=int(head[5].split('=')[1][:-1])
+    nburn=int(head[6].split('=')[1][:-1])
+    nrun=int(head[7].split('=')[1][:-1])
     ndim=3
     my_a=2
 
@@ -519,11 +472,6 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     logg_dist=array(logg_dist)
     Teff_dist=array(Teff_dist)
     kmag_dist=array(kmag_dist)
-#    import pickle
-#    pickle.dump((sampler.chain,sampler.blobs,sampler.lnprobability,sampler.flatlnprobability,sampler.flatchain,array([Teff_dist,logg_dist,kmag_dist]),p0),open('test_34028.p','wb'))
-
-    print('acor:')
-    print (sampler.acor)
  
     #print basic results
     print()
@@ -534,23 +482,8 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result=[]
 
     age_dist=sampler.flatchain[:,0]
-    print("len(age_dist)=", len(age_dist))
-    print(min(age_dist),max(age_dist),mean(age_dist))
-    print("len(age_dist)=", len(age_dist))
-
     mass_dist=sampler.flatchain[:,1]
-    print("len(mass_dist)=", len(mass_dist))
-    print(min(mass_dist),max(mass_dist),mean(mass_dist))
-    print("len(mass_dist)=", len(mass_dist))
-
     feh_dist = sampler.flatchain[:,2]
-    print("len(feh_dist)=", len(feh_dist))
-    print(min(feh_dist),max(feh_dist),mean(feh_dist))
-    print("len(feh_dist)=", len(feh_dist))
-
-    print("len(kmag_dist)=", len(kmag_dist))
-    print(min(kmag_dist),max(kmag_dist),mean(kmag_dist))
-    print("len(kmag_dist)=", len(kmag_dist))
 
     good=where( (lnp_flat>-15)& (kmag_dist!=99.99) & (logg_dist!=99.99) & (Teff_dist!=0) )
     if len(good)==0:
@@ -667,6 +600,7 @@ def run_emcee_full(FehS,eFehS,TeffS,loggS,eTeffS,eloggS,kmagS,ekmagS,parallaxS,e
     result.append(mode[1])#mass
     result.append(mode[2])#feh
     result.append(mean(sampler.acceptance_fraction))
+    print('age:{0:.2f}+/-{1:.2f}Gyr, mass: {2:.2f}+/-{3:.2f}M_sun'.format(mean(age_dist),std(age_dist),mean(mass_dist),std(mass_dist)))
 
     return(array(result),age_dist,mass_dist,Teff_dist,logg_dist,kmag_dist,feh_dist,lnp_flat)
 
@@ -677,7 +611,7 @@ def do_run_emcee_full(data,out_dir,out_prefix,FehS,eFehS,TeffS,loggS,eTeffS,elog
 
     filename = out_dir + '/' + out_prefix+'_'+str(begin)+'_'+str(increment)+'.dat'
     f=open(filename.strip(),'w')
-    f.write("{0:>5s}".format('HIP'))
+    f.write("{0:>5s}".format('ID'))
     f.write("{0:>13s}{1:>13s}{2:>13s}{3:>13s}{4:>13s}{5:>13s}{6:>13s}{7:>13s}{8:>13s}{9:>13s}{10:>13s}{11:>13s}{12:>13s}{13:>13s}{14:>13s}{15:>13s}{16:>13s}{17:>13s}{18:>13s}{19:>13s}{20:>13s}".format('age_mean',  'age_sigma',  'mass_mean', 'mass_sigma',  'teff_mean','teff_sigma','logg_mean','logg_sigma', 'kmag_mean','kmag_sigma','FeH_mean', 'FeH_sigma','age_mode','mass_mode','feh_mode','acc_frac','teffS','loggS','FehS','kmagS','parallaxS'))
     f.write('\n')
     for i in range(begin,end,increment):
