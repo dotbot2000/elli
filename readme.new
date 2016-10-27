@@ -1,0 +1,27 @@
+Working version of Elli (elli2 branch)
+27-10-16 Jane Lin (u5027368@anu.edu.au)
+
+*to run, change the following lines in run_mcmc.py:
+parameters: 1=to include, 0=to exclude the parameter in the likelihood
+nwalkers: number of MCMC walkers (must be int)
+nburn: number of burn-in steps (must be int)
+nrun: length of MCMC chain (must be int)
+num_stars: number of stars (must be int, use 'all' to run the whole sample)
+max_threads: number of cores (default=1)
+out_dir: name of the out directory 
+out_prefix: name of the files 
+data: where the data file is located, remember to change the delimiter (if required). 
+If you want the whole MCMC chain, use 'do_run_emcee_full' in Process. 
+
+*data formats:
+The data must have the following columns specified in run_mcmc.py. Dummy variables can be used for parallax and kmag. 
+Example inputs can be found in test_stars.csv
+
+*output:
+The output files are split into n threads. Some meaningful columns are:
+age_mean, age_sigma, mass_mean, mass_sigma, acc_frac (the acceptance fraction) 
+_S columns are from the input
+If do_run_emcee_full is enabled, each star will have an individual file in addition to the thread files. 
+
+*tips:
+see http://dan.iel.fm/emcee/current/user/faq/
